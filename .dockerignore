@@ -1,0 +1,14 @@
+.git
+.gitignore
+.tools
+**/__pycache__
+**/*.pyc
+**/.ipynb_checkpoints
+*.pdf
+notebook/
+locust/results/
+scripts/
+.env
+*.md
+!README.md
+api/app_data.db

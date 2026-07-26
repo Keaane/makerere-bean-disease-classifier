@@ -1,0 +1,31 @@
+#!/bin/sh
+set -e
+
+PORT="${PORT:-8000}"
+
+# If Render mounted a persistent disk at /var/data, use it for models + training
+# images so uploads/retrains survive redeploys. Seed from the image on first boot.
+if [ -d /var/data ]; then
+  mkdir -p /var/data/models /var/data/data/train /var/data/data/test
+
+  if [ ! -f /var/data/models/bean_model_latest.h5 ] && [ -f /app/seed/models/bean_model_latest.h5 ]; then
+    echo "Seeding model onto persistent disk..."
+    cp -a /app/seed/models/. /var/data/models/
+  fi
+
+  # Seed train/test class folders if empty (ignore .gitkeep-only dirs).
+  for split in train test; do
+    count=$(find /var/data/data/$split -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${count:-0}" = "0" ] && [ -d /app/seed/data/$split ]; then
+      echo "Seeding data/$split onto persistent disk..."
+      cp -a /app/seed/data/$split/. /var/data/data/$split/
+    fi
+  done
+
+  export BEAN_DATA_ROOT=/var/data
+  export BEAN_MODEL_DIR=/var/data/models
+  export BEAN_TRAIN_DIR=/var/data/data/train
+fi
+
+echo "Starting API on 0.0.0.0:${PORT} (model_dir=${BEAN_MODEL_DIR})"
+exec uvicorn main:app --host 0.0.0.0 --port "$PORT"

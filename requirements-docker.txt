@@ -1,0 +1,7 @@
+# Runtime deps for the API container (notebook/Locust stay in requirements.txt).
+tensorflow>=2.15,<2.20
+numpy
+pillow
+fastapi
+uvicorn[standard]
+python-multipart

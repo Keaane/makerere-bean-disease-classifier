@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local runtime / artifacts
+api/app_data.db
+*.log
+
+# Locust generated (keep committed scale CSVs; ignore ad-hoc reruns if needed)
+# locust/results are part of the assignment deliverable
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large model versions (keep latest)
+models/bean_model_2*.h5
+
+# Local tooling
+.tools/
