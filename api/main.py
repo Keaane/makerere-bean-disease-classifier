@@ -223,4 +223,10 @@ def retrain(epochs: int = 5):
 @app.get("/visualizations/class-distribution")
 def class_distribution():
     """
-    Current class counts in data/train (or
+    Current class counts in data/train (original training data + any
+    images uploaded via /upload-data). Used by the UI monitoring charts.
+    """
+    counts = {}
+    for class_name in CLASS_NAMES:
+        counts[class_name] = _count_images(os.path.join(DATA_TRAIN_DIR, class_name))
+    return counts

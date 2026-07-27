@@ -6,7 +6,7 @@ staple crop and a main protein source for many East African households,
 including in Rwanda.
 
 - Video demo: _TODO: add YouTube link_
-- Live API/UI: _TODO: add Render URL after deploy_
+- Live API/UI: https://bean-disease-classifier.onrender.com
 
 ## Project description
 
@@ -130,9 +130,8 @@ One Docker web service (API + UI). Render does not run
 `docker-compose --scale`; paid plans use "multiple instances" instead. For
 this assignment, one instance is enough.
 
-`render.yaml` uses the **Free** plan (512 MB). Expect cold starts after idle,
-and possible OOM under heavy load or retrain. That is acceptable for a demo
-URL.
+`render.yaml` uses the Free plan (512 MB). Expect cold starts after idle,
+and possible OOM under heavy load or retrain. That is fine for a demo URL.
 
 1. Push this repo to GitHub (include `models/bean_model_latest.h5` and `data/`).
 2. In the [Render Dashboard](https://dashboard.render.com) → **New** →
@@ -140,8 +139,8 @@ URL.
    Service → Docker.
 3. Confirm instance type is Free, health check `/status`.
 4. Deploy. The first build is slow because of TensorFlow.
-5. Open `https://<your-service>.onrender.com`.
-6. Paste that URL into the Live API/UI line at the top of this README.
+5. Open https://bean-disease-classifier.onrender.com.
+6. Keep that URL on the Live API/UI line at the top of this README.
 
 `entrypoint.sh` binds uvicorn to Render's `$PORT`. On Free, uploads and
 retrains reset when the instance cycles (no persistent disk).
@@ -216,8 +215,8 @@ Confusion matrix, ROC curves, and training curves are in the notebook
 
 Locust headless against the nginx entrypoint (`http://localhost:8080`),
 hitting `/predict`, `/status`, and `/visualizations/class-distribution`.
-Scale 1–2: 6 users, spawn rate 2/s, 45s. Scale 4: 4 users, 60s. Host:
-Windows laptop ~4 GB RAM, Docker Desktop memory limit about 1.8 GB.
+Scale 1-2: 6 users, spawn rate 2/s, 45s. Scale 4: 4 users, 60s. Host:
+Windows laptop about 4 GB RAM, Docker Desktop memory limit about 1.8 GB.
 
 | API replicas | Total requests | Failures | Req/s (agg.) | Median `/predict` | p95 `/predict` |
 |---|---|---|---|---|---|
@@ -231,7 +230,7 @@ Raw CSVs: `locust/results/run_1containers_stats.csv`,
 On this machine, one replica performed best. A second replica did not raise
 throughput: TF inference already saturated the shared CPU, so nginx spreading
 load mostly added queueing (higher average and p95 latency). At four
-replicas the Docker VM was oversubscribed (about 250–500 MB RSS per API
+replicas the Docker VM was oversubscribed (about 250-500 MB RSS per API
 process inside a 1.8 GB limit), and almost every request timed out. On a
 larger host, the same `--scale api=N` setup should show rising req/s and
 falling p95 as N grows, because nginx round-robins across healthy replicas.
