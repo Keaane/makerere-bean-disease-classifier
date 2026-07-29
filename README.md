@@ -5,7 +5,7 @@ bean leaf can flag disease early, before a harvest is lost. Beans are a
 staple crop and a main protein source for many East African households,
 including in Rwanda.
 
-- Video demo: https://www.awesomescreenshot.com/video/55061359?key=8b63ddfe79d04ecb38e7a3db0a1ed305
+- Video demo: https://youtu.be/LwHj1jq8iAQ
 - Live API/UI: https://bean-disease-classifier.onrender.com
 
 ## Project description
