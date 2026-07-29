@@ -451,13 +451,12 @@
 
       <div>
         <h2 class="section-title">Trigger retraining</h2>
-        <p class="note" style="margin-top:0;">Retrains the current model on everything in <code>data/train</code>, including images uploaded on this page. Needs at least 20 images total.</p>
+        <p class="note" style="margin-top:0;">Fine-tunes the current model on a small subset of <code>data/train</code> (your uploads first). On Render Free use <strong>1 epoch</strong> — higher values often hit the 512&nbsp;MB memory limit.</p>
         <div class="field-row">
           <label for="epochs" style="color:var(--paper-dim);">Epochs</label>
           <select id="epochs">
-            <option value="3">3</option>
-            <option value="5" selected>5</option>
-            <option value="8">8</option>
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
           </select>
           <button class="action primary" id="retrain-btn">Start retraining</button>
         </div>
@@ -672,14 +671,31 @@ document.getElementById('retrain-btn').addEventListener('click', async () => {
 
   try {
     const res = await fetch(API_BASE + '/retrain?epochs=' + epochs, { method: 'POST' });
-    const data = await res.json();
+    const text = await res.text();
+    if (!text || !text.trim()) {
+      // Render free tier closes the connection after ~30s; retrain keeps running
+      // in the background. Treat an empty body as "submitted, check back shortly".
+      msg.textContent = 'Retraining is running in the background (request timed out on the server side). Check the Status tab in a minute to confirm it completed.';
+      msg.classList.add('show', 'ok');
+      loadStatus();
+      return;
+    }
+    let data;
+    try { data = JSON.parse(text); } catch (_) {
+      throw new Error('Server returned an unexpected response. Retrain may still be running — check the Status tab.');
+    }
     if (!res.ok) throw new Error(data.detail || 'retrain failed');
 
     msg.textContent = `Retrained on ${data.trained_on_images} images. New val_accuracy: ${data.final_val_accuracy != null ? data.final_val_accuracy.toFixed(3) : 'n/a'}.`;
     msg.classList.add('show', 'ok');
     loadStatus();
   } catch (e) {
-    msg.textContent = e.message;
+    const raw = (e && e.message) ? e.message : String(e);
+    if (/Failed to fetch|NetworkError|fetch/i.test(raw)) {
+      msg.textContent = 'Connection dropped during retrain. On Render Free this usually means the service ran out of memory (512 MB). Wait ~1 min for restart, then retry with 1 epoch and only 2–3 uploaded images.';
+    } else {
+      msg.textContent = raw;
+    }
     msg.classList.add('show', 'err');
   } finally {
     btn.disabled = false;

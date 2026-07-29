@@ -149,19 +149,64 @@ def preprocess_image(image, label=None, augment=False):
     return image, label
 
 
-def build_pipeline(ds, batch_size=32, augment=False, shuffle=False):
+def build_pipeline(ds, batch_size=32, augment=False, shuffle=False, shuffle_buffer=1000):
     """
     Turns a raw tf.data.Dataset of (image, label) pairs into a batched,
     preprocessed, prefetching pipeline ready for model.fit/evaluate.
     """
     if shuffle:
-        ds = ds.shuffle(1000)
+        ds = ds.shuffle(shuffle_buffer)
     ds = ds.map(
         lambda img, lbl: preprocess_image(img, lbl, augment=augment),
         num_parallel_calls=tf.data.AUTOTUNE,
     )
-    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    ds = ds.batch(batch_size).prefetch(1)
     return ds
+
+
+def prepare_retrain_subset(source_dir, work_dir, max_per_class=16):
+    """
+    Builds a small class-folder tree under work_dir for API retrain.
+
+    Prefers files uploaded via the UI (names start with uploaded_), then
+    fills up to max_per_class with other images. Keeps peak RAM low on
+    free-tier hosts that cannot load the full training set.
+    """
+    import shutil
+
+    if os.path.isdir(work_dir):
+        shutil.rmtree(work_dir)
+    os.makedirs(work_dir, exist_ok=True)
+
+    selected = {}
+    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
+
+    for class_name in CLASS_NAMES:
+        class_src = os.path.join(source_dir, class_name)
+        class_dst = os.path.join(work_dir, class_name)
+        os.makedirs(class_dst, exist_ok=True)
+
+        if not os.path.isdir(class_src):
+            selected[class_name] = 0
+            continue
+
+        names = [
+            n for n in os.listdir(class_src)
+            if os.path.splitext(n)[1].lower() in image_exts
+        ]
+        uploaded = sorted(n for n in names if n.startswith("uploaded_"))
+        others = sorted(n for n in names if not n.startswith("uploaded_"))
+        # Prefer newest uploads (name contains timestamp), then fill with others.
+        picks = (uploaded[::-1] + others)[:max_per_class]
+
+        for name in picks:
+            shutil.copy2(
+                os.path.join(class_src, name),
+                os.path.join(class_dst, name),
+            )
+        selected[class_name] = len(picks)
+
+    return selected
 
 
 def preprocess_image_from_path(path):

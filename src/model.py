@@ -54,24 +54,31 @@ def build_model(num_classes=NUM_CLASSES, fine_tune_base=False):
     return model
 
 
-def train_model(model, train_ds, val_ds, epochs=15, model_dir="../models"):
+def train_model(model, train_ds, val_ds, epochs=15, model_dir="../models", lightweight=False):
     """
     Trains the model with early stopping + checkpointing on val_accuracy,
     and saves a timestamped version alongside a stable 'latest' pointer
     so the API can always load the current production model.
+
+    lightweight=True skips mid-training ModelCheckpoint (saves a second
+    full model copy) so API retrain fits on small Render instances.
     """
     os.makedirs(model_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     versioned_path = os.path.join(model_dir, f"bean_model_{timestamp}.h5")
 
+    patience = 1 if lightweight else 4
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_accuracy", patience=4, restore_best_weights=True
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            versioned_path, monitor="val_accuracy", save_best_only=True
+            monitor="val_accuracy", patience=patience, restore_best_weights=True
         ),
     ]
+    if not lightweight:
+        callbacks.append(
+            tf.keras.callbacks.ModelCheckpoint(
+                versioned_path, monitor="val_accuracy", save_best_only=True
+            )
+        )
 
     history = model.fit(
         train_ds,
@@ -83,11 +90,13 @@ def train_model(model, train_ds, val_ds, epochs=15, model_dir="../models"):
     # Stable path the API always loads from.
     latest_path = os.path.join(model_dir, "bean_model_latest.h5")
     model.save(latest_path)
+    if lightweight:
+        model.save(versioned_path)
 
     return history, versioned_path, latest_path
 
 
-def retrain_model(new_train_ds, new_val_ds, model_dir="../models", epochs=8):
+def retrain_model(new_train_ds, new_val_ds, model_dir="../models", epochs=8, lightweight=False):
     """
     Retraining entry point used by the API's /retrain endpoint.
 
@@ -96,6 +105,11 @@ def retrain_model(new_train_ds, new_val_ds, model_dir="../models", epochs=8):
     versions + saves the result. This is the function the retraining
     trigger in the UI ultimately calls.
     """
+    import gc
+
+    tf.keras.backend.clear_session()
+    gc.collect()
+
     latest_path = os.path.join(model_dir, "bean_model_latest.h5")
     if os.path.exists(latest_path):
         model = tf.keras.models.load_model(latest_path)
@@ -113,6 +127,11 @@ def retrain_model(new_train_ds, new_val_ds, model_dir="../models", epochs=8):
         model = build_model()
 
     history, versioned_path, latest_path = train_model(
-        model, new_train_ds, new_val_ds, epochs=epochs, model_dir=model_dir
+        model,
+        new_train_ds,
+        new_val_ds,
+        epochs=epochs,
+        model_dir=model_dir,
+        lightweight=lightweight,
     )
     return history, versioned_path, latest_path

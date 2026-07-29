@@ -1,12 +1,13 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 #
-# TensorFlow needs real RAM. Free/Starter (512 MB) will OOM.
-# Use at least Standard (2 GB). Pro (4 GB) is better for Locust demos.
+# TensorFlow needs RAM. Free (512 MB) can serve predictions but full-set
+# retrain will OOM. This repo uses a capped retrain subset so Free can
+# demo upload+retrain with 1 epoch. Prefer Standard (2 GB) if available.
 services:
   - type: web
     name: bean-disease-classifier
     runtime: docker
-    plan: standard
+    plan: free
     healthCheckPath: /status
     dockerContext: .
     dockerfilePath: ./Dockerfile
@@ -14,15 +15,16 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: OMP_NUM_THREADS
-        value: "2"
+        value: "1"
       - key: TF_NUM_INTRAOP_THREADS
-        value: "2"
+        value: "1"
       - key: TF_NUM_INTEROP_THREADS
         value: "1"
       - key: TF_CPP_MIN_LOG_LEVEL
         value: "2"
-    # Persist uploads + retrained models across deploys (optional but useful).
-    disk:
-      name: bean-persistent
-      mountPath: /var/data
-      sizeGB: 2
+      - key: RETRAIN_MAX_PER_CLASS
+        value: "12"
+      - key: RETRAIN_BATCH_SIZE
+        value: "2"
+      - key: RETRAIN_MAX_EPOCHS
+        value: "2"

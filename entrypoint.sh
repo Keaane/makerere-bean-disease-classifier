@@ -27,5 +27,12 @@ if [ -d /var/data ]; then
   export BEAN_TRAIN_DIR=/var/data/data/train
 fi
 
-echo "Starting API on 0.0.0.0:${PORT} (model_dir=${BEAN_MODEL_DIR})"
-exec uvicorn main:app --host 0.0.0.0 --port "$PORT"
+echo "Starting API on 0.0.0.0:${PORT} (model_dir=${BEAN_MODEL_DIR:-/app/models})"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export TF_NUM_INTRAOP_THREADS="${TF_NUM_INTRAOP_THREADS:-1}"
+export TF_NUM_INTEROP_THREADS="${TF_NUM_INTEROP_THREADS:-1}"
+export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
+export RETRAIN_MAX_PER_CLASS="${RETRAIN_MAX_PER_CLASS:-12}"
+export RETRAIN_BATCH_SIZE="${RETRAIN_BATCH_SIZE:-2}"
+export RETRAIN_MAX_EPOCHS="${RETRAIN_MAX_EPOCHS:-2}"
+exec uvicorn main:app --host 0.0.0.0 --port "$PORT" --timeout-keep-alive 300

@@ -19,6 +19,11 @@ from preprocessing import (
 _MODEL_CACHE = {}
 
 
+def clear_model_cache():
+    """Drop cached models so retrain can reclaim RAM on small hosts."""
+    _MODEL_CACHE.clear()
+
+
 def load_model(model_path="../models/bean_model_latest.h5"):
     """
     Loads (and caches) the current production model. Cache is keyed by

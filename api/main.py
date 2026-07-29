@@ -1,23 +1,29 @@
 """
-main.py
--------
 FastAPI service for the Bean Leaf Disease Classifier.
 
 Endpoints:
-  GET  /status                      - uptime, model version, dataset & prediction stats
-  POST /predict                     - predict the class of a single uploaded image
-  POST /upload-data/{class_name}    - bulk-upload images for a class, for retraining
-  POST /retrain                     - trigger retraining on newly uploaded data
-  GET  /visualizations/class-distribution   - class counts (train data + uploads)
+  GET  /status
+  POST /predict
+  POST /upload-data/{class_name}
+  POST /retrain
+  GET  /visualizations/class-distribution
 
-Run locally with:
+Run locally:
     uvicorn main:app --reload --port 8000
 """
 
+import gc
 import os
-import sys
-import time
 import shutil
+import sys
+import tempfile
+import time
+
+# Keep TensorFlow lean before it is imported by src modules.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,18 +31,30 @@ from fastapi.responses import FileResponse
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from preprocessing import CLASS_NAMES, load_dataset_from_directory, build_pipeline  # noqa: E402
+from preprocessing import (  # noqa: E402
+    CLASS_NAMES,
+    load_dataset_from_directory,
+    build_pipeline,
+    prepare_retrain_subset,
+)
 from model import retrain_model  # noqa: E402
-from prediction import predict_image  # noqa: E402
+from prediction import predict_image, clear_model_cache  # noqa: E402
 
 import database  # noqa: E402
 
 APP_START_TIME = time.time()
 
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
-DATA_TRAIN_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "train")
+_DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
+_DEFAULT_TRAIN_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "train")
+MODEL_DIR = os.environ.get("BEAN_MODEL_DIR", _DEFAULT_MODEL_DIR)
+DATA_TRAIN_DIR = os.environ.get("BEAN_TRAIN_DIR", _DEFAULT_TRAIN_DIR)
 MODEL_PATH = os.path.join(MODEL_DIR, "bean_model_latest.h5")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
+
+# Free Render is ~512 MB. Full-set retrain OOMs; keep a small subset.
+RETRAIN_MAX_PER_CLASS = int(os.environ.get("RETRAIN_MAX_PER_CLASS", "12"))
+RETRAIN_BATCH_SIZE = int(os.environ.get("RETRAIN_BATCH_SIZE", "2"))
+RETRAIN_MAX_EPOCHS = int(os.environ.get("RETRAIN_MAX_EPOCHS", "2"))
 
 
 def _count_images(directory: str) -> int:
@@ -48,6 +66,7 @@ def _count_images(directory: str) -> int:
         for name in os.listdir(directory)
         if os.path.splitext(name)[1].lower() in IMAGE_EXTENSIONS
     )
+
 
 app = FastAPI(
     title="Bean Leaf Disease Classifier API",
@@ -70,6 +89,14 @@ def on_startup():
     for class_name in CLASS_NAMES:
         os.makedirs(os.path.join(DATA_TRAIN_DIR, class_name), exist_ok=True)
 
+    try:
+        import tensorflow as tf
+
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+        tf.config.threading.set_intra_op_parallelism_threads(1)
+    except Exception:
+        pass
+
 
 UI_DIR = os.path.join(os.path.dirname(__file__), "..", "ui")
 
@@ -86,8 +113,13 @@ def root():
 def api_info():
     return {
         "service": "Bean Leaf Disease Classifier API",
-        "endpoints": ["/status", "/predict", "/upload-data/{class_name}", "/retrain",
-                      "/visualizations/class-distribution"],
+        "endpoints": [
+            "/status",
+            "/predict",
+            "/upload-data/{class_name}",
+            "/retrain",
+            "/visualizations/class-distribution",
+        ],
     }
 
 
@@ -173,12 +205,12 @@ async def upload_data(class_name: str, files: list[UploadFile] = File(...)):
 
 
 @app.post("/retrain")
-def retrain(epochs: int = 5):
+def retrain(epochs: int = 1):
     """
-    Triggers retraining on the current contents of data/train (original
-    data + any images uploaded via /upload-data). Loads the current
-    production model and fine-tunes it further, then promotes the
-    result to bean_model_latest.h5.
+    Triggers lightweight retraining for small cloud hosts.
+
+    Uses a capped per-class subset (uploads preferred) so Free-tier
+    Render (512 MB) does not OOM on the full training folder.
     """
     total_images = sum(
         _count_images(os.path.join(DATA_TRAIN_DIR, c)) for c in CLASS_NAMES
@@ -186,19 +218,67 @@ def retrain(epochs: int = 5):
     if total_images < 20:
         raise HTTPException(
             status_code=400,
-            detail=f"Not enough training data to retrain ({total_images} images found, need >= 20).",
+            detail=(
+                f"Not enough training data to retrain "
+                f"({total_images} images found, need >= 20)."
+            ),
         )
+
+    epochs = max(1, min(int(epochs), RETRAIN_MAX_EPOCHS))
+    work_dir = tempfile.mkdtemp(prefix="bean_retrain_")
 
     try:
-        train_raw, val_raw = load_dataset_from_directory(DATA_TRAIN_DIR)
-        train_ds = build_pipeline(train_raw, batch_size=16, augment=True, shuffle=True)
-        val_ds = build_pipeline(val_raw, batch_size=16, augment=False, shuffle=False)
+        # Free RAM held by the cached predict model before loading for train.
+        clear_model_cache()
+        gc.collect()
+
+        selected = prepare_retrain_subset(
+            DATA_TRAIN_DIR, work_dir, max_per_class=RETRAIN_MAX_PER_CLASS
+        )
+        subset_total = sum(selected.values())
+        if subset_total < 12:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Retrain subset too small ({subset_total} images).",
+            )
+
+        train_raw, val_raw = load_dataset_from_directory(work_dir)
+        train_ds = build_pipeline(
+            train_raw,
+            batch_size=RETRAIN_BATCH_SIZE,
+            augment=False,
+            shuffle=True,
+            shuffle_buffer=32,
+        )
+        val_ds = build_pipeline(
+            val_raw,
+            batch_size=RETRAIN_BATCH_SIZE,
+            augment=False,
+            shuffle=False,
+            shuffle_buffer=32,
+        )
 
         history, versioned_path, latest_path = retrain_model(
-            train_ds, val_ds, model_dir=MODEL_DIR, epochs=epochs
+            train_ds,
+            val_ds,
+            model_dir=MODEL_DIR,
+            epochs=epochs,
+            lightweight=True,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Retraining failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Retraining failed: {e}. "
+                "On Render Free (512 MB) use 1 epoch and upload only a few images."
+            ),
+        )
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        clear_model_cache()
+        gc.collect()
 
     final_val_accuracy = None
     val_accs = history.history.get("val_accuracy") or []
@@ -206,7 +286,7 @@ def retrain(epochs: int = 5):
         final_val_accuracy = float(val_accs[-1])
 
     database.log_retrain_event(
-        num_new_images=total_images,
+        num_new_images=subset_total,
         epochs=epochs,
         final_val_accuracy=final_val_accuracy,
         model_version=os.path.basename(versioned_path),
@@ -216,7 +296,12 @@ def retrain(epochs: int = 5):
         "status": "retrained",
         "model_version": os.path.basename(versioned_path),
         "final_val_accuracy": final_val_accuracy,
-        "trained_on_images": total_images,
+        "trained_on_images": subset_total,
+        "subset_by_class": selected,
+        "note": (
+            f"Used a memory-safe subset (max {RETRAIN_MAX_PER_CLASS}/class). "
+            "Uploaded images are preferred."
+        ),
     }
 
 
